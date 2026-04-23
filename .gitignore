@@ -1,0 +1,38 @@
+# 🔹 Virtual environment
+venv/
+.venv/
+env/
+
+# 🔹 Environment variables
+.env
+
+# 🔹 Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# 🔹 Django
+db.sqlite3
+*.log
+staticfiles/
+media/
+
+# 🔹 JWT / Security
+*.pem
+jwt_keys/
+
+# 🔹 IDE
+.idea/
+.vscode/
+
+# 🔹 OS
+.DS_Store
+Thumbs.db
+
+# 🔹 Docker
+.dockerignore
+
+# 🔹 Misc
+*.swp
+*.bak
