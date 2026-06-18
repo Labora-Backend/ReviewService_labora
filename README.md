@@ -1,94 +1,95 @@
-# Review Service
+# Labora Review Service
 
-This is a Django-based review service built as part of my microservice backend project.
+Production-ready Django REST Framework microservice for review and rating workflows.
 
-This service is responsible for handling user reviews and related operations.
+## Responsibilities
 
----
+- Create one review per reviewer per completed job.
+- Verify job status and participants through the Job Service API.
+- Prevent self-reviews, fake reviews, and duplicates.
+- Expose user and job review lists with average rating and total review counts.
+- Support reviewer-only updates, reviewer/admin soft deletes, admin review listing, pagination, and sorting.
+- Verify Auth Service JWT access tokens with the RS256 public key.
+- Publish `review_posted` events to the Notification Service.
 
-## What this service does
+## API
 
-* Create and manage reviews
-* Handle API requests related to reviews
-* Works as an independent service in a microservice architecture
-
----
-
-## Tech Used
-
-* Python
-* Django
-* Django REST Framework
-* Docker
-
----
-
-## Project Structure
+Swagger UI is available at:
 
 ```text
-ReviewService/
-│
-├── review/                # App logic (models, views, serializers)
-├── ReviewService/         # Main Django project
-├── jwt_keys/              # JWT keys (ignored in git)
-├── manage.py
-├── requirements.txt
-├── Dockerfile
-├── .gitignore
-└── README.md
+GET /api/docs/
 ```
 
----
+Core endpoints:
 
-## How to Run
+```text
+POST   /reviews/
+GET    /reviews/                       # admin only
+PUT    /reviews/{id}/                  # original reviewer only, 24h default edit window
+DELETE /reviews/{id}/                  # original reviewer or admin
+GET    /reviews/user/{user_id}/
+GET    /reviews/job/{job_id}/
+```
 
-### 1. Clone the repo
+The same routes are also mounted below `/api/` for gateway compatibility.
+
+## Example Requests
+
+Create a review:
 
 ```bash
-git clone https://github.com/YOUR-USERNAME/ReviewService.git
-cd ReviewService
+curl -X POST http://localhost:8009/reviews/ \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "job_id": 42,
+    "reviewee_id": 19,
+    "rating": 5,
+    "comment": "Clear scope, fast feedback, and smooth delivery."
+  }'
 ```
 
-### 2. Create virtual environment
+Get reviews for a user:
+
+```bash
+curl "http://localhost:8009/reviews/user/19/?sort=highest_rating&page=1&page_size=20" \
+  -H "Authorization: Bearer $ACCESS_TOKEN"
+```
+
+Delete a review:
+
+```bash
+curl -X DELETE http://localhost:8009/reviews/7/ \
+  -H "Authorization: Bearer $ACCESS_TOKEN"
+```
+
+## Environment
+
+Copy `.env.template` to `.env` and configure:
+
+```text
+JWT_PUBLIC_KEY_PATH=/app/jwt_keys/public.pem
+JOB_DETAIL_URL_TEMPLATE=http://job-service:8000/api/jobs/{job_id}/
+NOTIFICATION_EVENT_URL=http://notification-service:8000/api/notifications/create/
+REVIEW_EDIT_WINDOW_HOURS=24
+```
+
+This service stores external identifiers as integers only. It does not create direct foreign keys to user, job, payment, or application tables.
+
+## Local Development
 
 ```bash
 python -m venv venv
 venv\Scripts\activate
-```
-
-### 3. Install dependencies
-
-```bash
 pip install -r requirements.txt
-```
-
-### 4. Run migrations
-
-```bash
 python manage.py migrate
+python manage.py runserver 8009
 ```
 
-### 5. Start server
+## Docker
+
+From the repository root:
 
 ```bash
-python manage.py runserver
+docker-compose up --build review_service
 ```
-
----
-
-## Run with Docker
-
-```bash
-docker build -t review-service .
-docker run -p 8000:8000 review-service
-```
-
----
-
-## Notes
-
-* `.env`, `jwt_keys/`, and `.pem` files are ignored for security
-* This service is part of a larger backend system
-
----
-

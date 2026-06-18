@@ -10,23 +10,46 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/5.2/ref/settings/
 """
 
+import os
+import sys
 from pathlib import Path
 
-# Build paths inside the project like this: BASE_DIR / 'subdir'.
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from labora_shared.env_config import (
+    load_dotenv_for_service,
+    get_jwt_public_key_path,
+    get_db_config,
+    mysql_databases,
+    read_public_key_pem,
+)
+
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+load_dotenv_for_service(BASE_DIR)
 
-# Quick-start development settings - unsuitable for production
-# See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
+_cfg = get_db_config()
+DB_HOST = _cfg["DB_HOST"]
+DB_NAME = _cfg["DB_NAME"]
+DB_USER = _cfg["DB_USER"]
+DB_PASSWORD = _cfg["DB_PASSWORD"]
+DB_PORT = _cfg["DB_PORT"]
 
-# SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-3cg*o^36+%4gb$#uuu22qzv!(9@ce@cr0#5kqu&s4v_!%fvoi)'
+JWT_PUBLIC_KEY_PATH = get_jwt_public_key_path(BASE_DIR)
 
-# SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "django-insecure-dev-only-change-me")
+DEBUG = os.getenv("DEBUG", "False").lower() in ("1", "true", "yes")
+_allowed = os.getenv("ALLOWED_HOSTS", "*").strip()
+ALLOWED_HOSTS = [h.strip() for h in _allowed.split(",") if h.strip()]
+if not ALLOWED_HOSTS:
+    ALLOWED_HOSTS = ["*"]
 
-ALLOWED_HOSTS = []
 
+SERVICE_API_KEY = os.getenv(
+    "SERVICE_API_KEY"
+)
 
 # Application definition
 
@@ -37,11 +60,14 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
-    'review'
+    'corsheaders',
+    'rest_framework',
+    'review',
 ]
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    'corsheaders.middleware.CorsMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -73,12 +99,8 @@ WSGI_APPLICATION = 'ReviewService.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/5.2/ref/settings/#databases
 
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
-    }
-}
+DATABASES = mysql_databases()
+DATABASES["default"]["OPTIONS"] = {"charset": "utf8mb4"}
 
 
 # Password validation
@@ -116,25 +138,37 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/5.2/howto/static-files/
 
 STATIC_URL = 'static/'
+STATIC_ROOT = BASE_DIR / "staticfiles"
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
-
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": (
-        "rest_framework_simplejwt.authentication.JWTStatelessUserAuthentication",
-    ),
-    "DEFAULT_PERMISSION_CLASSES": (
-        "rest_framework.permissions.IsAuthenticated",
+        "review.authentication.CustomJWTAuthentication",
     ),
 }
+JWT_PUBLIC_KEY = read_public_key_pem(JWT_PUBLIC_KEY_PATH)
+PUBLIC_KEY = JWT_PUBLIC_KEY
 
 SIMPLE_JWT = {
     "ALGORITHM": "RS256",
-    "VERIFYING_KEY": open(BASE_DIR / "public.pem").read(),
+    "VERIFYING_KEY": JWT_PUBLIC_KEY,
     "AUTH_HEADER_TYPES": ("Bearer",),
 }
 
+# --------------------------------------------------
+# SERVICE URLs
+# --------------------------------------------------
+AUTH_SERVICE_URL = os.getenv("AUTH_SERVICE_URL")
+CLIENT_PROFILE_SERVICE_URL = os.getenv("CLIENT_PROFILE_SERVICE_URL")
+FREELANCER_PROFILE_SERVICE_URL = os.getenv("FREELANCER_PROFILE_SERVICE_URL")
+MESSAGE_SERVICE_URL = os.getenv("MESSAGE_SERVICE_URL")
+JOB_SERVICE_URL = os.getenv("JOB_SERVICE_URL")
+SKILL_SERVICE_URL = os.getenv("SKILL_SERVICE_URL")
+APPLICATION_SERVICE_URL = os.getenv("APPLICATION_SERVICE_URL")
+PAYMENT_SERVICE_URL = os.getenv("PAYMENT_SERVICE_URL")
+REVIEW_SERVICE_URL = os.getenv("REVIEW_SERVICE_URL")
+NOTIFICATION_SERVICE_URL = os.getenv("NOTIFICATION_SERVICE_URL")
