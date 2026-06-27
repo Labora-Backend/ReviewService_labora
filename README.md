@@ -1,95 +1,88 @@
-# Labora Review Service
+# Review Service
 
-Production-ready Django REST Framework microservice for review and rating workflows.
+Review Service stores job reviews and rating statistics for Labora. It verifies job participation and completion through Job Service before accepting a review, notifies the reviewee, and synchronizes freelancer rating totals.
 
 ## Responsibilities
 
-- Create one review per reviewer per completed job.
-- Verify job status and participants through the Job Service API.
-- Prevent self-reviews, fake reviews, and duplicates.
-- Expose user and job review lists with average rating and total review counts.
-- Support reviewer-only updates, reviewer/admin soft deletes, admin review listing, pagination, and sorting.
-- Verify Auth Service JWT access tokens with the RS256 public key.
-- Publish `review_posted` events to the Notification Service.
+- Let clients and freelancers review each other after a completed job.
+- Return reviews and rating statistics for a user.
+- Prevent duplicate reviews for the same reviewer/reviewee/job combination.
+- Provide internal review list, detail, delete, and statistics endpoints for Admin Service.
+- Synchronize freelancer rating totals with Freelancer Profile Service.
 
-## API
+## Features
 
-Swagger UI is available at:
+- Completed-job validation through Job Service.
+- Participant validation against job `client_id` and resolved `freelancer_id`.
+- Self-review prevention.
+- Comment length validation capped at 2000 characters.
+- Rating aggregation using average rating and total review count.
 
-```text
-GET /api/docs/
-```
+## API Endpoints
 
-Core endpoints:
+Base path: `/api/`
 
-```text
-POST   /reviews/
-GET    /reviews/                       # admin only
-PUT    /reviews/{id}/                  # original reviewer only, 24h default edit window
-DELETE /reviews/{id}/                  # original reviewer or admin
-GET    /reviews/user/{user_id}/
-GET    /reviews/job/{job_id}/
-```
+| Method | Path | Auth | Description |
+| --- | --- | --- | --- |
+| `POST` | `reviews/create/` | Client or freelancer JWT | Create a review after job completion. |
+| `GET` | `reviews/user/<user_id>/` | Bearer JWT | List reviews received by a user. |
+| `GET` | `reviews/<review_id>/` | Bearer JWT | Return one review. |
+| `GET` | `reviews/user/<user_id>/rating/` | Bearer JWT | Return average rating and review count for a user. |
 
-The same routes are also mounted below `/api/` for gateway compatibility.
+## Internal Service Endpoints
 
-## Example Requests
+Internal endpoints use `X-Service-Key: <SERVICE_API_KEY>`.
 
-Create a review:
+| Method | Path | Description |
+| --- | --- | --- |
+| `GET` | `internal/users/<user_id>/rating/` | Return aggregate rating stats. |
+| `GET` | `internal/reviews/` | Return paginated review summaries. |
+| `GET` | `internal/reviews/stats/` | Return counts by star rating. |
+| `GET` | `internal/reviews/<review_id>/` | Return one review summary. |
+| `DELETE` | `internal/reviews/<review_id>/delete/` | Delete a review. |
 
-```bash
-curl -X POST http://localhost:8009/reviews/ \
-  -H "Authorization: Bearer $ACCESS_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "job_id": 42,
-    "reviewee_id": 19,
-    "rating": 5,
-    "comment": "Clear scope, fast feedback, and smooth delivery."
-  }'
-```
+## Authentication
 
-Get reviews for a user:
+User endpoints use `review.authentication.CustomJWTAuthentication`. Internal endpoints bypass JWT and require `X-Service-Key`.
 
-```bash
-curl "http://localhost:8009/reviews/user/19/?sort=highest_rating&page=1&page_size=20" \
-  -H "Authorization: Bearer $ACCESS_TOKEN"
-```
+## Environment Variables
 
-Delete a review:
+| Variable | Purpose |
+| --- | --- |
+| `DJANGO_SECRET_KEY` | Django secret key. |
+| `DEBUG` | Enables debug mode when set to `1`, `true`, or `yes`. |
+| `ALLOWED_HOSTS` | Comma-separated allowed hosts. Defaults to `*`. |
+| `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD` | MySQL database configuration. |
+| `JWT_PUBLIC_KEY_PATH` | Public key used to verify Auth Service JWTs. |
+| `SERVICE_API_KEY` | Shared key for internal calls. |
+| `JOB_SERVICE_URL` | Used to verify job status and participants. |
+| `FREELANCER_PROFILE_SERVICE_URL` | Used to synchronize rating totals. |
+| `NOTIFICATION_SERVICE_URL` | Used by shared notification client. |
+| `*_SERVICE_URL` | Additional service URL settings loaded by settings. |
 
-```bash
-curl -X DELETE http://localhost:8009/reviews/7/ \
-  -H "Authorization: Bearer $ACCESS_TOKEN"
-```
-
-## Environment
-
-Copy `.env.template` to `.env` and configure:
-
-```text
-JWT_PUBLIC_KEY_PATH=/app/jwt_keys/public.pem
-JOB_DETAIL_URL_TEMPLATE=http://job-service:8000/api/jobs/{job_id}/
-NOTIFICATION_EVENT_URL=http://notification-service:8000/api/notifications/create/
-REVIEW_EDIT_WINDOW_HOURS=24
-```
-
-This service stores external identifiers as integers only. It does not create direct foreign keys to user, job, payment, or application tables.
-
-## Local Development
+## Setup
 
 ```bash
-python -m venv venv
-venv\Scripts\activate
+cd ReviewService_labora
+python -m venv .venv
+.venv\Scripts\activate
 pip install -r requirements.txt
 python manage.py migrate
 python manage.py runserver 8009
 ```
 
-## Docker
+## Service Architecture
 
-From the repository root:
+- Django project: `ReviewService`
+- App: `review`
+- Authentication: `review.authentication.CustomJWTAuthentication`
+- Internal permission: `review.permissions.internal_service.IsInternalService`
+- Outbound dependencies: Job Service, Freelancer Profile Service, and Notification Service
 
-```bash
-docker-compose up --build review_service
-```
+## Database Models
+
+- `Review`: stores reviewer id, reviewee id, job id, rating, comment, and timestamps. A unique constraint prevents duplicate reviews per reviewer/reviewee/job.
+
+## Notification/Event Flow
+
+After a review is committed, the service sends `review_received` to the reviewee. It then attempts to patch Freelancer Profile Service with updated rating stats; sync failure is logged and does not roll back the review.
