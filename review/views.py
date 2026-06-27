@@ -1,46 +1,50 @@
-from django.db.models import Avg
-from django.conf import settings
-import requests
 
+from django.conf import settings
+from django.db import transaction, IntegrityError
+from django.db.models import Avg, Count
+import requests
+import logging
+
+from rest_framework.pagination import PageNumberPagination
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 
+from labora_shared.notification_client import send_notification
 from .authentication import CustomJWTAuthentication
 from .permissions.internal_service import IsInternalService
 from .models import Review
-from .serializers import ReviewSerializer
-import logging
+from .serializers import ReviewSerializer, InternalReviewListSerializer
 
 logger = logging.getLogger(__name__)
-def get_rating_stats(user_id):
 
-    reviews = Review.objects.filter(
-        reviewee_id=user_id
+
+def get_rating_stats(user_id):
+    stats = (
+        Review.objects
+        .filter(reviewee_id=user_id)
+        .aggregate(
+            average_rating=Avg("rating"),
+            total_reviews=Count("id")
+        )
     )
 
-    average_rating = reviews.aggregate(
-        Avg("rating")
-    )["rating__avg"]
-
     return {
-        "average_rating": round(
-            average_rating, 2
-        ) if average_rating else 0,
-        "total_reviews": reviews.count()
+        "average_rating": round(stats["average_rating"], 2)
+        if stats["average_rating"] else 0,
+        "total_reviews": stats["total_reviews"]
     }
+
+
 class CreateReviewView(APIView):
 
     authentication_classes = [CustomJWTAuthentication]
 
     def post(self, request):
-        print("USER:", request.user)
-        print("AUTH:", request.auth)
-        print(request.headers.get("Authorization"))
+
         user = request.user
 
         if user.role not in ["client", "freelancer"]:
-
             return Response(
                 {
                     "error": "Only clients and freelancers can submit reviews"
@@ -48,31 +52,19 @@ class CreateReviewView(APIView):
                 status=status.HTTP_403_FORBIDDEN
             )
 
-        serializer = ReviewSerializer(
-            data=request.data
-        )
+        serializer = ReviewSerializer(data=request.data)
 
         if not serializer.is_valid():
-
             return Response(
                 serializer.errors,
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        reviewee_id = serializer.validated_data.get(
-            "reviewee_id"
-        )
+        reviewee_id = serializer.validated_data["reviewee_id"]
+        job_id = serializer.validated_data["job_id"]
 
-        job_id = serializer.validated_data.get(
-            "job_id"
-        )
-
-        # -----------------------------
-        # VERIFY JOB FROM JOB SERVICE
-        # -----------------------------
-
+        # Verify job
         try:
-
             job_response = requests.get(
                 f"{settings.JOB_SERVICE_URL}/api/internal/jobs/{job_id}/",
                 headers={
@@ -80,16 +72,8 @@ class CreateReviewView(APIView):
                 },
                 timeout=5
             )
-            print(job_response.status_code)
-            print(job_response.text)
-            print("JOB RESPONSE STATUS")
-            print(job_response.status_code)
-
-            print("JOB RESPONSE BODY")
-            print(job_response.text)
 
         except requests.RequestException:
-
             return Response(
                 {
                     "error": "Unable to verify job"
@@ -98,7 +82,6 @@ class CreateReviewView(APIView):
             )
 
         if job_response.status_code != 200:
-
             return Response(
                 {
                     "error": "Job not found"
@@ -108,24 +91,12 @@ class CreateReviewView(APIView):
 
         job_data = job_response.json()
 
-        client_id = job_data.get(
-            "client_id"
-        )
+        client_id = job_data.get("client_id")
+        freelancer_id = job_data.get("freelancer_id")
+        job_status = job_data.get("status")
 
-        freelancer_id = job_data.get(
-            "freelancer_id"
-        )
-
-        job_status = job_data.get(
-            "status"
-        )
-
-        # -----------------------------
-        # JOB MUST BE COMPLETED
-        # -----------------------------
-
+        # Job must be completed
         if job_status != "completed":
-
             return Response(
                 {
                     "error": "Reviews are allowed only after job completion"
@@ -133,15 +104,8 @@ class CreateReviewView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        # -----------------------------
-        # REVIEWER MUST BELONG TO JOB
-        # -----------------------------
-
-        if user.id not in [
-            client_id,
-            freelancer_id
-        ]:
-
+        # User must belong to the job
+        if user.id not in [client_id, freelancer_id]:
             return Response(
                 {
                     "error": "You are not a participant in this job"
@@ -149,17 +113,12 @@ class CreateReviewView(APIView):
                 status=status.HTTP_403_FORBIDDEN
             )
 
-        # -----------------------------
-        # VALID REVIEW TARGET
-        # -----------------------------
-
-        if user.id == client_id:
-            expected_reviewee = freelancer_id
-        else:
-            expected_reviewee = client_id
+        # Determine expected reviewee
+        expected_reviewee = (
+            freelancer_id if user.id == client_id else client_id
+        )
 
         if reviewee_id != expected_reviewee:
-
             return Response(
                 {
                     "error": "Invalid reviewee for this job"
@@ -167,12 +126,8 @@ class CreateReviewView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        # -----------------------------
-        # PREVENT SELF REVIEW
-        # -----------------------------
-
+        # Prevent self-review
         if reviewee_id == user.id:
-
             return Response(
                 {
                     "error": "You cannot review yourself"
@@ -180,16 +135,24 @@ class CreateReviewView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        # -----------------------------
-        # PREVENT DUPLICATE REVIEW
-        # -----------------------------
+        try:
 
-        if Review.objects.filter(
-            reviewer_id=user.id,
-            reviewee_id=reviewee_id,
-            job_id=job_id
-        ).exists():
+            with transaction.atomic():
 
+                review = serializer.save(
+                    reviewer_id=user.id
+                )
+
+                transaction.on_commit(
+                    lambda: send_notification(
+                        user_id=reviewee_id,
+                        notification_type="review_received",
+                        title="New Review",
+                        message="You received a new review."
+                    )
+                )
+
+        except IntegrityError:
             return Response(
                 {
                     "error": "You already reviewed this user for this job"
@@ -197,44 +160,29 @@ class CreateReviewView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        # -----------------------------
-        # SAVE REVIEW
-        # -----------------------------
-
-        review = serializer.save(
-            reviewer_id=user.id
-        )
-
-        # -----------------------------
-        # UPDATE FREELANCER PROFILE
-        # -----------------------------
-
-        stats = get_rating_stats(
-            reviewee_id
-        )
-
+        # Sync rating after successful commit
         try:
-            print("RATING STATS:", stats)
-            print("SYNCING RATING")
-            print("USER:", reviewee_id)
-            print("STATS:", stats)
+
+            stats = get_rating_stats(reviewee_id)
+
             response = requests.patch(
-                f"{settings.FREELANCER_PROFILE_SERVICE_URL}/api/internal/freelancers/{reviewee_id}/rating/",
+                f"{settings.FREELANCER_PROFILE_SERVICE_URL}"
+                f"/api/internal/freelancers/{reviewee_id}/rating/",
                 json=stats,
                 headers={
                     "X-Service-Key": settings.SERVICE_API_KEY
                 },
                 timeout=5
             )
-            print("PATCH STATUS:", response.status_code)
-            print("PATCH BODY:", response.text)
 
             response.raise_for_status()
 
         except requests.RequestException as e:
 
             logger.error(
-                f"Failed to sync rating for user {reviewee_id}: {str(e)}"
+                "Failed to sync rating for user %s: %s",
+                reviewee_id,
+                str(e)
             )
 
         return Response(
@@ -245,15 +193,18 @@ class CreateReviewView(APIView):
             status=status.HTTP_201_CREATED
         )
 
+
 class UserReviewsView(APIView):
 
     authentication_classes = [CustomJWTAuthentication]
 
     def get(self, request, user_id):
 
-        reviews = Review.objects.filter(
-            reviewee_id=user_id
-        ).order_by("-created_at")
+        reviews = (
+            Review.objects
+            .filter(reviewee_id=user_id)
+            .order_by("-created_at")
+        )
 
         serializer = ReviewSerializer(
             reviews,
@@ -278,15 +229,6 @@ class ReviewDetailView(APIView):
                 id=review_id
             )
 
-            serializer = ReviewSerializer(
-                review
-            )
-
-            return Response(
-                serializer.data,
-                status=status.HTTP_200_OK
-            )
-
         except Review.DoesNotExist:
 
             return Response(
@@ -295,6 +237,14 @@ class ReviewDetailView(APIView):
                 },
                 status=status.HTTP_404_NOT_FOUND
             )
+
+        serializer = ReviewSerializer(review)
+
+        return Response(
+            serializer.data,
+            status=status.HTTP_200_OK
+        )
+
 
 class UserRatingView(APIView):
 
@@ -312,6 +262,7 @@ class UserRatingView(APIView):
 
 
 class InternalUserRatingView(APIView):
+    authentication_classes = []
 
     permission_classes = [IsInternalService]
 
@@ -320,4 +271,127 @@ class InternalUserRatingView(APIView):
         return Response(
             get_rating_stats(user_id),
             status=status.HTTP_200_OK
+        )
+
+
+class InternalReviewListView(APIView):
+    authentication_classes = []
+
+    permission_classes = [IsInternalService]
+
+    def get(self, request):
+
+        reviews = Review.objects.all().order_by("-created_at")
+
+        paginator = PageNumberPagination()
+        paginator.page_size = 20
+
+        page = paginator.paginate_queryset(
+            reviews,
+            request
+        )
+
+        serializer = InternalReviewListSerializer(
+            page,
+            many=True
+        )
+
+        return paginator.get_paginated_response(
+            serializer.data
+        )
+
+
+class InternalReviewStatsView(APIView):
+    authentication_classes = []
+
+    permission_classes = [IsInternalService]
+
+    def get(self, request):
+
+        return Response({
+
+            "total_reviews": Review.objects.count(),
+
+            "five_star_reviews": Review.objects.filter(
+                rating=5
+            ).count(),
+
+            "four_star_reviews": Review.objects.filter(
+                rating=4
+            ).count(),
+
+            "three_star_reviews": Review.objects.filter(
+                rating=3
+            ).count(),
+
+            "two_star_reviews": Review.objects.filter(
+                rating=2
+            ).count(),
+
+            "one_star_reviews": Review.objects.filter(
+                rating=1
+            ).count(),
+
+        })
+
+
+class InternalReviewDetailView(APIView):
+    authentication_classes = []
+
+    permission_classes = [IsInternalService]
+
+    def get(self, request, review_id):
+
+        try:
+
+            review = Review.objects.get(
+                pk=review_id
+            )
+
+        except Review.DoesNotExist:
+
+            return Response(
+                {
+                    "error": "Review not found"
+                },
+                status=404
+            )
+
+        serializer = InternalReviewListSerializer(
+            review
+        )
+
+        return Response(
+            serializer.data
+        )
+
+
+class InternalDeleteReviewView(APIView):
+    authentication_classes = []
+
+    permission_classes = [IsInternalService]
+
+    def delete(self, request, review_id):
+
+        try:
+
+            review = Review.objects.get(
+                pk=review_id
+            )
+
+        except Review.DoesNotExist:
+
+            return Response(
+                {
+                    "error": "Review not found"
+                },
+                status=404
+            )
+
+        review.delete()
+
+        return Response(
+            {
+                "message": "Review deleted successfully"
+            }
         )

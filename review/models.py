@@ -21,4 +21,13 @@ class Review(models.Model):
     )
 
     class Meta:
-        db_table = "reviews"
+        constraints = [
+            models.UniqueConstraint(
+                fields=[
+                    "reviewer_id",
+                    "reviewee_id",
+                    "job_id"
+                ],
+                name="unique_review_per_job"
+            )
+        ]

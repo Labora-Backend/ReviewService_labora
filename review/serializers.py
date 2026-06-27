@@ -33,3 +33,28 @@ class ReviewSerializer(serializers.ModelSerializer):
             )
 
         return value
+
+
+class InternalReviewListSerializer(serializers.ModelSerializer):
+
+    class Meta:
+
+        model = Review
+
+        fields = [
+
+            "id",
+
+            "reviewer_id",
+
+            "reviewee_id",
+
+            "job_id",
+
+            "rating",
+
+            "comment",
+
+            "created_at",
+
+        ]

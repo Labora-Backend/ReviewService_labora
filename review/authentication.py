@@ -1,5 +1,4 @@
 from functools import wraps
-import logging
 import os
 
 import jwt
@@ -20,9 +19,6 @@ class ServiceUser:
         self.is_authenticated = True
 
 
-logger = logging.getLogger(__name__)
-
-
 # ==========================================
 # JWT AUTHENTICATION
 # ==========================================
@@ -31,51 +27,33 @@ class CustomJWTAuthentication(BaseAuthentication):
 
     def authenticate(self, request):
 
-        print("CUSTOM JWT AUTH CALLED")
-
         auth_header = request.META.get(
             "HTTP_AUTHORIZATION",
             ""
         )
 
-        print("AUTH HEADER:", auth_header)
-
-
-
         if not auth_header:
-            print("NO AUTH HEADER")
             raise exceptions.AuthenticationFailed(
                 "Missing Authorization header."
             )
 
-        print("HEADER FOUND")
-
         if not auth_header.startswith("Bearer "):
-            print("INVALID FORMAT")
             raise exceptions.AuthenticationFailed(
                 "Invalid Authorization header format."
             )
 
         token = auth_header.split(" ", 1)[1].strip()
 
-        print("TOKEN EXTRACTED")
-
         payload = self._decode_token(token)
-
-        print("PAYLOAD:", payload)
 
         user = ServiceUser(
             user_id=payload["user_id"],
             role=payload["role"]
         )
 
-        print("USER CREATED:", user.id, user.role)
-
         return (user, payload)
 
     def _decode_token(self, token):
-
-        print("DECODING TOKEN")
 
         public_key = getattr(
             settings,
@@ -103,8 +81,6 @@ class CustomJWTAuthentication(BaseAuthentication):
                     "verify_aud": bool(expected_audience)
                 }
             )
-
-            print("TOKEN DECODED:", payload)
 
             return payload
 
@@ -177,7 +153,7 @@ def role_required(allowed_roles):
 # ==========================================
 
 def admin_only(view_func):
-    return role_required(["admin"])(view_func)
+    return role_required(["labora_admin"])(view_func)
 
 
 def client_only(view_func):
@@ -190,11 +166,11 @@ def freelancer_only(view_func):
 
 def client_or_admin(view_func):
     return role_required(
-        ["client", "admin"]
+        ["client", "labora_admin"]
     )(view_func)
 
 
 def freelancer_or_admin(view_func):
     return role_required(
-        ["freelancer", "admin"]
+        ["freelancer", "labora_admin"]
     )(view_func)

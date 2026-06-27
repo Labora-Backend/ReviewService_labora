@@ -4,7 +4,8 @@ from .views import (
     UserReviewsView,
     ReviewDetailView,
     UserRatingView,
-    InternalUserRatingView,
+    InternalUserRatingView, InternalReviewListView, InternalReviewStatsView, InternalReviewDetailView,
+    InternalDeleteReviewView,
 )
 
 urlpatterns = [
@@ -32,5 +33,24 @@ urlpatterns = [
     path(
         "internal/users/<int:user_id>/rating/",
         InternalUserRatingView.as_view()
+    ),
+    path(
+        "internal/reviews/",
+        InternalReviewListView.as_view()
+    ),
+
+    path(
+        "internal/reviews/stats/",
+        InternalReviewStatsView.as_view()
+    ),
+
+    path(
+        "internal/reviews/<int:review_id>/",
+        InternalReviewDetailView.as_view()
+    ),
+
+    path(
+        "internal/reviews/<int:review_id>/delete/",
+        InternalDeleteReviewView.as_view()
     ),
 ]
